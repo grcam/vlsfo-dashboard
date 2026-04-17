@@ -1,117 +1,148 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import random
 import difflib
-from datetime import datetime
 
-# Configuração da página
-st.set_page_config(page_title="VLSFO Dashboard", layout="wide")
+# Function to generate sample data if Excel fails
+def generate_sample_data():
+    dates = pd.date_range(start='2023-01-01', end=datetime.now(), freq='D')
+    data = {
+        'Date': dates,
+        'Santos': [random.uniform(50, 70) for _ in dates],
+        'Montevideo': [random.uniform(50, 70) for _ in dates],
+        'Balboa': [random.uniform(50, 70) for _ in dates],
+        'Buenos Aires': [random.uniform(50, 70) for _ in dates],
+        'Singapore 1': [random.uniform(50, 70) for _ in dates],
+        'Singapore 2': [random.uniform(50, 70) for _ in dates],
+        'ARA': [random.uniform(50, 70) for _ in dates],
+        'SGP': [random.uniform(50, 70) for _ in dates],
+        'USGC': [random.uniform(50, 70) for _ in dates],
+        'Fujairah': [random.uniform(50, 70) for _ in dates],
+        'Rotterdam': [random.uniform(50, 70) for _ in dates],
+        'AMRAM01': [random.uniform(50, 70) for _ in dates],
+        'FOFSB00': [random.uniform(50, 70) for _ in dates],
+        'MOPS': [random.uniform(50, 70) for _ in dates],
+    }
+    return pd.DataFrame(data)
 
-# Função para correspondência difusa de colunas
-def fuzzy_match_column(df, target):
-    matches = difflib.get_close_matches(target, df.columns, n=1, cutoff=0.6)
-    return matches[0] if matches else None
-
-# Função para carregar dados do Excel com tratamento de erros
+# Function to load data with fallbacks
 def load_data():
     try:
         df = pd.read_excel('dashboard.xlsx')
-        return df
-    except FileNotFoundError:
-        st.error("Erro: Arquivo 'dashboard.xlsx' não encontrado. Verifique o caminho do arquivo.")
-        return None
+        st.success('Dados carregados do arquivo Excel com sucesso.')
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {str(e)}")
-        return None
+        st.warning(f'Erro ao carregar o arquivo Excel: {str(e)}. Usando dados de exemplo.')
+        df = generate_sample_data()
+    return df
 
-# Carregar dados
-df = load_data()
-if df is None:
-    st.stop()
+# Function to auto-detect date column
+def detect_date_column(df):
+    possible_dates = ['date', 'data', 'dt', 'time', 'timestamp']
+    for col in df.columns:
+        if any(difflib.SequenceMatcher(None, col.lower(), pd.lower()).ratio() > 0.8 for pd in possible_dates):
+            try:
+                df[col] = pd.to_datetime(df[col])
+                return col
+            except:
+                pass
+    # Fallback: assume first column if datetime-like
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]) or df[col].dtype == 'object':
+            try:
+                df[col] = pd.to_datetime(df[col])
+                return col
+            except:
+                pass
+    st.error('Coluna de data não encontrada. Verifique o arquivo Excel.')
+    return None
 
-# Definir abas
-tab1, tab2 = st.tabs(["Bunker Benchmarks", "Core Flat Prices"])
+# Function to auto-detect price columns with fuzzy matching
+def detect_price_columns(df, required_columns):
+    detected = {}
+    for req in required_columns:
+        best_match = None
+        best_ratio = 0
+        for col in df.columns:
+            ratio = difflib.SequenceMatcher(None, req.lower(), col.lower()).ratio()
+            if ratio > best_ratio and ratio > 0.6:  # Threshold for match
+                best_match = col
+                best_ratio = ratio
+        if best_match:
+            detected[req] = best_match
+        else:
+            st.warning(f'Coluna para {req} não encontrada. Usando valores padrão.')
+            detected[req] = None
+    return detected
 
-# TAB 1: Bunker Benchmarks
-with tab1:
-    st.header("Bunker Benchmarks")
-    
-    # Definir os portos e seus códigos
-    ports = {
-        "Santos": "MFSAD00",
-        "Montevideo": "AMFMT00",
-        "Balboa": "MFBAE00",
-        "Buenos Aires": "MFBAD00",
-        "Singapore": "PUAFT00",
-        "Singapore Ex-wharf": "MFSPE00"
-    }
-    
-    # Layout: 2 linhas de 3 colunas
-    col1, col2, col3 = st.columns(3)
-    col4, col5, col6 = st.columns(3)
-    columns = [col1, col2, col3, col4, col5, col6]
-    
-    for i, (port, code) in enumerate(ports.items()):
-        with columns[i]:
-            # Correspondência difusa para a coluna do preço
-            price_col = fuzzy_match_column(df, f"{code}_price")
-            if price_col is None:
-                st.error(f"Coluna para {port} não encontrada.")
-                continue
-            
-            # Assumir que há uma coluna de data para ordenar
-            date_col = fuzzy_match_column(df, "date")
-            if date_col:
-                df_sorted = df.sort_values(by=date_col)
+# Main app
+def main():
+    st.set_page_config(page_title='Dashboard de Preços', layout='wide')
+    st.title('Dashboard de Preços de Bunker e Combustíveis')
+
+    # Load data
+    df = load_data()
+    if df.empty:
+        st.error('Dados não disponíveis.')
+        return
+
+    # Detect date column
+    date_col = detect_date_column(df)
+    if not date_col:
+        return
+
+    # Required columns for bunkers and cores
+    bunker_cols = ['Santos', 'Montevideo', 'Balboa', 'Buenos Aires', 'Singapore 1', 'Singapore 2']
+    core_cols = ['ARA', 'SGP', 'USGC', 'Fujairah', 'Rotterdam', 'AMRAM01', 'FOFSB00', 'MOPS']
+    all_required = bunker_cols + core_cols
+
+    # Detect price columns
+    detected_cols = detect_price_columns(df, all_required)
+
+    # Tabs
+    tab1, tab2 = st.tabs(['Bunker Benchmarks', 'Core Flat Prices'])
+
+    with tab1:
+        st.header('Benchmarks de Bunker')
+        cols = st.columns(3)
+        for i, bunker in enumerate(bunker_cols):
+            col = detected_cols.get(bunker)
+            if col and col in df.columns:
+                latest = df[col].iloc[-1]
+                prev = df[col].iloc[-2] if len(df) > 1 else latest
+                change = ((latest - prev) / prev) * 100 if prev != 0 else 0
+                delta_color = 'normal' if change >= 0 else 'inverse'
+                arrow = '🔺' if change >= 0 else '🔻'
+                cols[i % 3].metric(f'{bunker} {arrow}', f'{latest:.2f}', f'{change:.2f}%', delta_color=delta_color)
             else:
-                df_sorted = df
-            
-            # Último preço
-            latest_price = df_sorted[price_col].iloc[-1]
-            
-            # Preço anterior (assumir diário)
-            if len(df_sorted) > 1:
-                prev_price = df_sorted[price_col].iloc[-2]
-                change_pct = ((latest_price - prev_price) / prev_price) * 100
-            else:
-                change_pct = 0
-            
-            # Cor da seta
-            delta_color = "normal" if change_pct >= 0 else "inverse"
-            
-            # Exibir como métrica
-            st.metric(label=f"{port} ({code})", value=f"{latest_price:.2f}", delta=f"{change_pct:.2f}%", delta_color=delta_color)
+                cols[i % 3].metric(bunker, 'N/A', 'Dados indisponíveis')
 
-# TAB 2: Core Flat Prices
-with tab2:
-    st.header("Core Flat Prices")
-    
-    # Chart 1: FOB ARA, SGP (MOPS), USGC, Fujairah
-    st.subheader("FOB ARA, SGP (MOPS), USGC, Fujairah")
-    fig1 = go.Figure()
-    for col in ["FOB_ARA", "SGP_MOPS", "USGC", "Fujairah"]:
-        matched_col = fuzzy_match_column(df, col)
-        if matched_col:
-            fig1.add_trace(go.Scatter(x=df[date_col] if date_col else df.index, y=df[matched_col], mode='lines', name=col))
-    fig1.update_layout(title="Preços FOB ARA, SGP (MOPS), USGC, Fujairah", xaxis_title="Data", yaxis_title="Preço")
-    st.plotly_chart(fig1, use_container_width=True)
-    
-    # Chart 2: FO 1% Rotterdam + AMRAM01 together
-    st.subheader("FO 1% Rotterdam + AMRAM01")
-    fig2 = go.Figure()
-    for col in ["FO_1_Rotterdam", "AMRAM01"]:
-        matched_col = fuzzy_match_column(df, col)
-        if matched_col:
-            fig2.add_trace(go.Scatter(x=df[date_col] if date_col else df.index, y=df[matched_col], mode='lines', name=col))
-    fig2.update_layout(title="FO 1% Rotterdam + AMRAM01", xaxis_title="Data", yaxis_title="Preço")
-    st.plotly_chart(fig2, use_container_width=True)
-    
-    # Chart 3: FOFSB00 (strip) + MOPS together
-    st.subheader("FOFSB00 (strip) + MOPS")
-    fig3 = go.Figure()
-    for col in ["FOFSB00", "MOPS"]:
-        matched_col = fuzzy_match_column(df, col)
-        if matched_col:
-            fig3.add_trace(go.Scatter(x=df[date_col] if date_col else df.index, y=df[matched_col], mode='lines', name=col))
-    fig3.update_layout(title="FOFSB00 (strip) + MOPS", xaxis_title="Data", yaxis_title="Preço")
-    st.plotly_chart(fig3, use_container_width=True)
+    with tab2:
+        st.header('Preços Flat de Core')
+        chart_cols = ['ARA', 'SGP', 'USGC', 'Fujairah', 'Rotterdam+AMRAM01', 'FOFSB00+MOPS']
+        for chart in chart_cols:
+            if '+' in chart:
+                parts = chart.split('+')
+                cols = [detected_cols.get(p) for p in parts if detected_cols.get(p)]
+                if cols:
+                    fig = px.line(df, x=date_col, y=cols, title=chart)
+                    st.plotly_chart(fig)
+                else:
+                    st.warning(f'Dados para {chart} não disponíveis.')
+            else:
+                col = detected_cols.get(chart)
+                if col and col in df.columns:
+                    fig = px.line(df, x=date_col, y=col, title=chart)
+                    st.plotly_chart(fig)
+                else:
+                    st.warning(f'Dados para {chart} não disponíveis.')
+
+    # Debug info
+    if st.checkbox('Mostrar informações de debug'):
+        st.write('Colunas detectadas:', detected_cols)
+        st.write('Primeiras linhas do DataFrame:', df.head())
+
+if __name__ == '__main__':
+    main()
